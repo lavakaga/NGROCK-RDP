@@ -1,8 +1,7 @@
-name: TSun RDP Access
+name: TSun RDP Access (6 Hours)
 
-on: 
+on:
   workflow_dispatch:
-  push:
 
 jobs:
   build:
@@ -20,62 +19,57 @@ jobs:
         env:
           NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
 
-      - name: Enable Remote Desktop (RDP) 🚀
+      - name: Enable Remote Desktop 🚀
         run: |
-          # Enable RDP
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
-          # Enable RDP firewall
-          Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
-          # Allow NLA (network-level auth)
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 1
+          Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 1
 
-      - name: Create RDP User 🧑‍💻
+      - name: Create local user 🧑‍💻
         run: |
-          # Create user if it doesn't exist
           if (-not (Get-LocalUser -Name "saeedxdie" -ErrorAction SilentlyContinue)) {
             New-LocalUser -Name "saeedxdie" -Password (ConvertTo-SecureString "S@eedxdie1" -AsPlainText -Force)
           }
-          # Add to Administrators group
-          Add-LocalGroupMember -Group "Administrators" -Member "saeedxdie"
+          Add-LocalGroupMember -Group Administrators -Member saeedxdie
 
+      # Ngrok v3 syntax: `ngrok.exe tcp 3389 --log=stdout` works if you
+      # start it directly (no Start-Process), so the API starts reliably.
       - name: Start Ngrok Tunnel 🔗
         run: |
-          Start-Process -NoNewWindow -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp", "3389"
-          Write-Host "⏳ Waiting for Ngrok to initialize..."
-          Start-Sleep -Seconds 10
+          Start-Job { .\ngrok\ngrok.exe tcp 3389 --log=stdout --log-level=info } | Out-Null
+          Write-Host "Waiting for Ngrok to start..."
+          Start-Sleep -Seconds 15
 
-      - name: Get Ngrok Tunnel URL 🌍
+      - name: Fetch tunnel info 🌍
         shell: pwsh
         run: |
-          Write-Host "Checking Ngrok API for tunnel URL..."
-          $maxAttempts = 20
-          $attempt = 0
-          do {
+          $max = 30; $url = $null
+          for ($i=1; $i -le $max; $i++) {
             try {
               $resp = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels"
               if ($resp.tunnels.Count -gt 0) {
                 $url = $resp.tunnels[0].public_url
-                Write-Host "======================================"
-                Write-Host "✅ RDP Tunnel Ready!"
-                Write-Host "Address: $url"
-                Write-Host "Username: saeedxdie"
-                Write-Host "Password: S@eedxdie1"
-                Write-Host "======================================"
                 break
               }
-            } catch {
-              Write-Host "Ngrok not ready yet (attempt $($attempt+1)/$maxAttempts)..."
-              Start-Sleep -Seconds 3
-            }
-            $attempt++
-          } while ($attempt -lt $maxAttempts)
+            } catch {}
+            Write-Host "Ngrok not ready yet ($i/$max)..."
+            Start-Sleep -Seconds 3
+          }
 
           if ($null -eq $url) {
-            Write-Error "❌ Ngrok tunnel could not be established."
+            Write-Error "Ngrok tunnel still not ready after $max attempts. Printing log:"
+            Get-Content ngrok.log -Tail 40 -ErrorAction SilentlyContinue
             exit 1
           }
 
-      - name: Keep Session Alive (6 Hours) 🕓
+          Write-Host "======================================"
+          Write-Host "✅ RDP Tunnel Ready!"
+          Write-Host "Address: $url"
+          Write-Host "Username: saeedxdie"
+          Write-Host "Password: S@eedxdie1"
+          Write-Host "======================================"
+
+      - name: Keep alive 6 hours 🕓
         run: |
-          echo "RDP connection active for 6 hours..."
+          echo "Keeping RDP active for 6 hours..."
           timeout /t 21600

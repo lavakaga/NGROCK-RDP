@@ -1,34 +1,81 @@
 name: TSun RDP Access
 
-on: [push, workflow_dispatch]
+on: 
+  workflow_dispatch:
+  push:
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-    - name: Download Ngrok 📅
-      run: Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+      - name: Download Ngrok 📦
+        run: |
+          Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+          Expand-Archive ngrok.zip -DestinationPath ngrok
+          Remove-Item ngrok.zip
 
-    - name: Extract Ngrok 📦
-      run: Expand-Archive ngrok.zip
+      - name: Authenticate Ngrok 🔐
+        run: .\ngrok\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
+        env:
+          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
 
-    - name: Authenticate Ngrok 🔐
-      run: .\ngrok\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
-      env:
-        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+      - name: Enable Remote Desktop (RDP) 🚀
+        run: |
+          # Enable RDP
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
+          # Enable RDP firewall
+          Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
+          # Allow NLA (network-level auth)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 1
 
-    - name: Enable Terminal Services (RDP) 🚀
-      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server'-name "fDenyTSConnections" -Value 0
+      - name: Create RDP User 🧑‍💻
+        run: |
+          # Create user if it doesn't exist
+          if (-not (Get-LocalUser -Name "saeedxdie" -ErrorAction SilentlyContinue)) {
+            New-LocalUser -Name "saeedxdie" -Password (ConvertTo-SecureString "S@eedxdie1" -AsPlainText -Force)
+          }
+          # Add to Administrators group
+          Add-LocalGroupMember -Group "Administrators" -Member "saeedxdie"
 
-    - name: Enable Remote Desktop Firewall Rule 🔥
-      run: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+      - name: Start Ngrok Tunnel 🔗
+        run: |
+          Start-Process -NoNewWindow -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp", "3389"
+          Write-Host "⏳ Waiting for Ngrok to initialize..."
+          Start-Sleep -Seconds 10
 
-    - name: Set RDP User Authentication 🛡️
-      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+      - name: Get Ngrok Tunnel URL 🌍
+        shell: pwsh
+        run: |
+          Write-Host "Checking Ngrok API for tunnel URL..."
+          $maxAttempts = 20
+          $attempt = 0
+          do {
+            try {
+              $resp = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels"
+              if ($resp.tunnels.Count -gt 0) {
+                $url = $resp.tunnels[0].public_url
+                Write-Host "======================================"
+                Write-Host "✅ RDP Tunnel Ready!"
+                Write-Host "Address: $url"
+                Write-Host "Username: saeedxdie"
+                Write-Host "Password: S@eedxdie1"
+                Write-Host "======================================"
+                break
+              }
+            } catch {
+              Write-Host "Ngrok not ready yet (attempt $($attempt+1)/$maxAttempts)..."
+              Start-Sleep -Seconds 3
+            }
+            $attempt++
+          } while ($attempt -lt $maxAttempts)
 
-    - name: Create RDP User Account 🧑‍💻
-      run: Set-LocalUser -Name "saeedxdie" -Password (ConvertTo-SecureString -AsPlainText "S@eedxdie1" -Force)
+          if ($null -eq $url) {
+            Write-Error "❌ Ngrok tunnel could not be established."
+            exit 1
+          }
 
-    - name: Create Ngrok TCP Tunnel for RDP 🔗
-      run: .\ngrok\ngrok.exe tcp 3389
+      - name: Keep Session Alive (6 Hours) 🕓
+        run: |
+          echo "RDP connection active for 6 hours..."
+          timeout /t 21600
